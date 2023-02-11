@@ -8,15 +8,14 @@ import org.apache.kafka.common.serialization.Deserializer;
 import org.apache.kafka.common.serialization.Serde;
 import org.apache.kafka.common.serialization.Serdes;
 import org.apache.kafka.common.serialization.Serializer;
+import org.apache.kafka.common.utils.Bytes;
 import org.apache.kafka.connect.json.JsonDeserializer;
 import org.apache.kafka.connect.json.JsonSerializer;
 import org.apache.kafka.streams.KafkaStreams;
 import org.apache.kafka.streams.StreamsBuilder;
 import org.apache.kafka.streams.StreamsConfig;
-import org.apache.kafka.streams.kstream.Consumed;
-import org.apache.kafka.streams.kstream.KStream;
-import org.apache.kafka.streams.kstream.KTable;
-import org.apache.kafka.streams.kstream.Produced;
+import org.apache.kafka.streams.kstream.*;
+import org.apache.kafka.streams.state.KeyValueStore;
 
 
 import java.time.Instant;
@@ -28,11 +27,10 @@ public class BankBalanceApp {
         Properties config=new Properties();
 
         config.put(StreamsConfig.APPLICATION_ID_CONFIG,"bank-balance-app");
-        config.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG,"a83d7cfeae6d94812ae052860f089bf3-835140697.us-east-2.elb.amazonaws.com:9092");
+        config.put(StreamsConfig.BOOTSTRAP_SERVERS_CONFIG,"ad33fd143474544daa4a590ef88b97bf-2129345126.us-east-2.elb.amazonaws.com:9092");
         config.put(ConsumerConfig.AUTO_OFFSET_RESET_CONFIG,"earliest");
-        config.put(StreamsConfig.DEFAULT_KEY_SERDE_CLASS_CONFIG, Serdes.String().getClass());
-        config.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG,Serdes.String().getClass());
         config.put(StreamsConfig.CACHE_MAX_BYTES_BUFFERING_CONFIG,"0");
+        config.put(StreamsConfig.DEFAULT_VALUE_SERDE_CLASS_CONFIG,Serdes.String().getClass());
 
         // Exactly once processing!!
         config.put(StreamsConfig.PROCESSING_GUARANTEE_CONFIG, StreamsConfig.EXACTLY_ONCE);
@@ -58,12 +56,13 @@ public class BankBalanceApp {
 
         KTable<String,JsonNode> balancedata=balanceRecord
                 //1 - Agrupanddo os valroes
-                .groupByKey(Serdes.String(),jsonSerde)
+                .groupByKey()
                 .aggregate(
                         ()->initialBalance,
                         (key,transaction,balance)->newBalance(transaction,balance),
-                        jsonSerde,
-                        "bank-balance-agg"
+                        Materialized.<String,JsonNode, KeyValueStore<Bytes,byte[]>>as("bank-balance-agg")
+                                .withKeySerde(Serdes.String())
+                                .withValueSerde(jsonSerde)
                 );
 
         balancedata.toStream().to("balance-output", Produced.with(Serdes.String(),jsonSerde));
@@ -83,12 +82,13 @@ public class BankBalanceApp {
         //create new balance json object
         ObjectNode newBalance=JsonNodeFactory.instance.objectNode();
         newBalance.put("count",balance.get("count").asInt()+1);
-        newBalance.put("balance",balance.get("balance").asInt()+transaction.get("amount").isInt());
+        newBalance.put("balance",balance.get("balance").asInt()+transaction.get("amount").asInt());
 
         Long balanceEpoch=Instant.parse(balance.get("time").asText()).toEpochMilli();
         Long transactionEpoch=Instant.parse(transaction.get("time").asText()).toEpochMilli();
         Instant newBalanceInstant=Instant.ofEpochMilli(Math.max(balanceEpoch,transactionEpoch));
         newBalance.put("time",newBalanceInstant.toString());
 
+        return newBalance;
     }
 }
